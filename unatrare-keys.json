@@ -1,0 +1,22 @@
+{
+  "_WARNING": "KEEP PRIVATE. Do not commit to git. The subnet_bootstrap key is PUBLIC and safe to share with judge peers. The peer_pubkey is your identity. Never share keypair.json private keys.",
+  "_generated": "2026-05-03",
+
+  "subnet_channel": "unatrare-v1",
+
+  "admin_peer": {
+    "peer_pubkey_hex":   "8ab9982ec6dec92f1a16f0d11d05cb4ee7447752405f8d8ff9cf9c70e4b8b1af",
+    "peer_writer_key":   "1ea28e3d12da0976d055d1e2504675afd3e026cbe18437b08c2e0d28780d7807",
+    "trac_address":      "trac132uestkxmmyj7xsk7rg36pwtfmn5ga6jgp0cmrlee7w8pe9ckxhsagr2q9",
+    "store_name":        "unatrare-admin",
+    "msb_store_name":    "unatrare-admin-msb",
+    "msb_address":       "trac1sxs75m5hz0gq6zxcqn5n08auszlteytzv9s7g8h97h5s2ukn7rmq749lxj",
+    "msb_writer_key":    "f5275a8dee0f40da50e90e0ca720862054ab01c9042a6d392f4ccf9fbb4bc4e0"
+  },
+
+  "subnet_bootstrap": "1ea28e3d12da0976d055d1e2504675afd3e026cbe18437b08c2e0d28780d7807",
+
+  "_note_subnet_bootstrap": "This is the admin peer's writer key. Share this with all judge peers via --subnet-bootstrap flag so they can join the unatrare-v1 subnet.",
+  "_note_msb": "MSB wallet needs TNK to execute contract transactions (0.03 TNK each). Fund trac_address above before enabling /tx commands.",
+  "_note_sc_bridge_token": "Generate before first SC-Bridge use: openssl rand -hex 32. Store in .env.local as SC_BRIDGE_TOKEN."
+}

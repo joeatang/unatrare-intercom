@@ -9,6 +9,9 @@
   },
   "dependencies": {
     "b4a": "^1.6.7",
+    "corestore": "^6.0.0",
+    "hyperdrive": "^11.0.0",
+    "hyperswarm": "^4.0.0",
     "bare-ws": "2.0.3",
     "compact-encoding": "^2.18.0",
     "crypto": "npm:bare-node-crypto",

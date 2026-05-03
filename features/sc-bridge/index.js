@@ -72,6 +72,7 @@ class ScBridge extends Feature {
     this.requireAuth = config.requireAuth !== false;
     this.cliEnabled = config.cliEnabled === true;
     this.debug = config.debug === true;
+    this.onUnknownCommand = typeof config.onUnknownCommand === 'function' ? config.onUnknownCommand : null;
 
     this.defaultFilterRaw = typeof config.filter === 'string' ? config.filter : '';
     this.defaultFilter = parseFilter(this.defaultFilterRaw);
@@ -392,8 +393,13 @@ class ScBridge extends Feature {
         reply({ type: 'info', info: this.info });
         return;
       }
-      default:
+      default: {
+        if (typeof this.onUnknownCommand === 'function') {
+          this.onUnknownCommand(message, reply, sendError);
+          return;
+        }
         sendError(`Unknown type: ${message.type}`);
+      }
     }
   }
 

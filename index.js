@@ -14,6 +14,7 @@ import SampleContract from './contract/contract.js';
 import { Timer } from './features/timer/index.js';
 import Sidechannel from './features/sidechannel/index.js';
 import ScBridge from './features/sc-bridge/index.js';
+import ArtDrive from './features/artdrive/index.js';
 
 const { env, storeLabel, flags } = getPearRuntime();
 
@@ -474,6 +475,14 @@ if (admin && admin.value === peer.wallet.publicKey && peer.base.writable) {
 }
 
 let scBridge = null;
+
+// ── Art Drive: Hyperdrive for P2P art replication ─────────────────
+const artDrive = new ArtDrive(peer, {
+  storesDir: peerStoresDirectory,
+  storeName: peerStoreNameRaw,
+});
+artDrive.start().catch((err) => console.warn('[artdrive] Start failed:', err?.message ?? err));
+
 if (scBridgeEnabled) {
   scBridge = new ScBridge(peer, {
     host: scBridgeHost,
@@ -498,6 +507,21 @@ if (scBridgeEnabled) {
       peerWriterKey,
       sidechannelEntry,
       sidechannelExtras: sidechannelExtras.slice(),
+    },
+    onUnknownCommand: (message, reply, sendError) => {
+      if (message.type === 'store_art') {
+        const { hash, data, mime } = message;
+        if (!hash || !data || !mime) { sendError('store_art requires: hash, data (base64), mime'); return; }
+        artDrive.storeFile(hash, data, mime)
+          .then(() => reply({ type: 'art_stored', hash }))
+          .catch((err) => sendError(err?.message ?? 'store_art failed'));
+        return;
+      }
+      if (message.type === 'drive_info') {
+        reply({ type: 'drive_info', key: artDrive.getDriveKey() });
+        return;
+      }
+      sendError(`Unknown type: ${message.type}`);
     },
   });
 }
