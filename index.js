@@ -517,6 +517,17 @@ if (scBridgeEnabled) {
           .catch((err) => sendError(err?.message ?? 'store_art failed'));
         return;
       }
+      if (message.type === 'get_art') {
+        const { hash } = message;
+        if (!hash || !/^[0-9a-f]{64}$/i.test(hash)) { sendError('get_art requires a valid 64-char hex hash'); return; }
+        artDrive.getFile(hash)
+          .then((result) => {
+            if (!result) { sendError('not_found'); return; }
+            reply({ type: 'art_data', hash, data: b4a.toString(result.data, 'base64'), mime: result.mime });
+          })
+          .catch((err) => sendError(err?.message ?? 'get_art failed'));
+        return;
+      }
       if (message.type === 'drive_info') {
         reply({ type: 'drive_info', key: artDrive.getDriveKey() });
         return;

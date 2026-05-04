@@ -62,6 +62,19 @@ class ArtDrive extends Feature {
     return true;
   }
 
+  /**
+   * Retrieve a stored file by its SHA-256 hash.
+   * Returns { data: Buffer, mime: string } or null if not found.
+   */
+  async getFile(hash) {
+    if (!this.drive) throw new Error('[artdrive] Not started');
+    const entry = await this.drive.entry(`/art/${hash}`);
+    if (!entry) return null;
+    const buf = await this.drive.get(`/art/${hash}`);
+    const mime = entry.value?.metadata?.contentType || 'application/octet-stream';
+    return { data: buf, mime };
+  }
+
   /** Return the drive's public key as a hex string. */
   getDriveKey() {
     return this.drive ? b4a.toString(this.drive.key, 'hex') : null;
