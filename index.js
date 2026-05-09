@@ -532,6 +532,18 @@ if (scBridgeEnabled) {
         reply({ type: 'drive_info', key: artDrive.getDriveKey() });
         return;
       }
+      if (message.type === 'query_token') {
+        const { token } = message;
+        if (!token || typeof token !== 'string') { sendError('query_token requires: token'); return; }
+        const tokenName = token.toUpperCase().replace(/[^A-Z0-9]/g, '');
+        fetch(`https://unatrare.wtf/c/${tokenName}.json`)
+          .then(r => {
+            if (r.ok) return r.json().then(data => reply({ type: 'token_result', token: tokenName, certified: true, data }));
+            reply({ type: 'token_result', token: tokenName, certified: false, data: null });
+          })
+          .catch(err => sendError(err?.message ?? 'query_token failed'));
+        return;
+      }
       sendError(`Unknown type: ${message.type}`);
     },
   });
@@ -561,11 +573,28 @@ const sidechannel = new Sidechannel(peer, {
   ownerWriteChannels: sidechannelOwnerWriteChannels || undefined,
   ownerKeys: sidechannelOwnerMap.size > 0 ? sidechannelOwnerMap : undefined,
   welcomeByChannel: sidechannelWelcomeMap.size > 0 ? sidechannelWelcomeMap : undefined,
-  onMessage: scBridgeEnabled
-    ? (channel, payload, connection) => scBridge.handleSidechannelMessage(channel, payload, connection)
-    : sidechannelQuiet
-      ? () => {}
-      : null,
+  onMessage: (channel, payload, connection) => {
+    // P2P certification query from other TRAC peers on the unatrare-query channel.
+    // Any peer can ask: { op: 'query', token: 'TOKENNAME' }
+    // We reply by broadcasting the result back to the same channel.
+    if (channel === 'unatrare-query' && payload?.op === 'query' && typeof payload?.token === 'string') {
+      const tokenName = payload.token.toUpperCase().replace(/[^A-Z0-9]/g, '');
+      fetch(`https://unatrare.wtf/c/${tokenName}.json`)
+        .then(r => r.ok ? r.json() : null)
+        .then(meta => {
+          const result = meta
+            ? { op: 'result', token: tokenName, certified: true, series: meta.series, card: meta.card_number, score: meta.judge_score }
+            : { op: 'result', token: tokenName, certified: false };
+          peer.sidechannel.send(channel, result).catch(() => {});
+        })
+        .catch(() => {});
+      return;
+    }
+    // Everything else → SC-Bridge if enabled, else quiet/default
+    if (scBridgeEnabled) {
+      scBridge.handleSidechannelMessage(channel, payload, connection);
+    }
+  },
 });
 peer.sidechannel = sidechannel;
 

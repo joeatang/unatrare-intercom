@@ -36,6 +36,7 @@ pear run . \
   --peer-store-name    unatrare-admin \
   --msb-store-name     unatrare-admin-msb \
   --subnet-channel     unatrare-v1 \
+  --sidechannels       unatrare-verdicts,unatrare-query \
   --sc-bridge          1 \
   --sc-bridge-port     49222 \
   --sc-bridge-token    "$SC_BRIDGE_TOKEN" \
