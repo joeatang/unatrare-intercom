@@ -421,6 +421,7 @@ const peer = new Peer({
   wallet: new Wallet(),
   protocol: UnatrareProtocol,
   contract: UnatrareContract,
+  api_tx_exposed: true,  // allow programmatic tx from index.js bootstrap
 });
 await peer.ready();
 
@@ -467,11 +468,26 @@ if (scBridgeEnabled) {
 console.log('================================================================');
 console.log('');
 
-const admin = await peer.base.view.get('admin');
-if (admin && admin.value === peer.wallet.publicKey && peer.base.writable) {
+// Auto-init timer if this peer is the subnet writer (bootstrap / admin node).
+// No need to run /add_admin interactively — writable == we are the indexer.
+if (peer.base.writable) {
   const timer = new Timer(peer, { update_interval: 60_000 });
   await peer.protocol.instance.addFeature('timer', timer);
   timer.start().catch((err) => console.error('Timer feature stopped:', err?.message ?? err));
+  console.log('[unatrare] Timer feature started (admin node)');
+
+  // Auto-submit set_admin tx on first boot if contract admin not yet recorded.
+  setTimeout(async () => {
+    try {
+      const adminAddr = await peer.protocol.instance.getSigned('admin_address');
+      if (!adminAddr && peer.protocol.instance.api?.tx) {
+        await peer.protocol.instance.api.tx('set_admin');
+        console.log('[unatrare] Auto-submitted set_admin tx — contract admin bootstrapped');
+      }
+    } catch (err) {
+      console.warn('[unatrare] Auto set_admin failed (will retry on next restart):', err?.message ?? err);
+    }
+  }, 8_000); // wait 8s for peer to connect to DHT peers before submitting
 }
 
 let scBridge = null;
