@@ -469,14 +469,28 @@ console.log('================================================================');
 console.log('');
 
 // Auto-init timer + admin bootstrap if this peer is the subnet writer (bootstrap / admin node).
-// No need to run /add_admin interactively — writable == we are the indexer.
 if (peer.base.writable) {
+  // Step 1: Ensure the autobase admin is set (required for Feature ops to be verified).
+  // The autobase 'admin' key is separate from our contract's admin_address.
+  // addAdmin only works when writer == subnet bootstrap writer and admin is not yet set.
+  const existingAdmin = await peer.base.view.get('admin');
+  if (existingAdmin === null) {
+    const walletPubkey = String(peer.wallet.publicKey).toLowerCase();
+    await peer.base.append({ type: 'addAdmin', key: walletPubkey });
+    console.log('[unatrare] Autobase admin set:', walletPubkey.slice(0, 8) + '...');
+    // Wait for the indexer to process the addAdmin entry before appending features
+    await new Promise(r => setTimeout(r, 3000));
+  } else {
+    console.log('[unatrare] Autobase admin already set:', String(existingAdmin.value).slice(0, 8) + '...');
+  }
+
+  // Step 2: Start Timer oracle feature (feeds currentTime to contract)
   const timer = new Timer(peer, { update_interval: 60_000 });
   await peer.protocol.instance.addFeature('timer', timer);
   timer.start().catch((err) => console.error('Timer feature stopped:', err?.message ?? err));
   console.log('[unatrare] Timer feature started (admin node)');
 
-  // AdminBootstrap feature — sets admin_address via Feature mechanism (no MSB needed).
+  // Step 3: AdminBootstrap feature — sets admin_address via Feature mechanism (no MSB needed).
   // Works immediately for the sole writer. Idempotent on subsequent restarts.
   const adminBootstrap = new AdminBootstrap(peer);
   await peer.protocol.instance.addFeature('admin_bootstrap', adminBootstrap);
