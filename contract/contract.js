@@ -12,7 +12,7 @@ import {Contract} from 'trac-peer'
  *   cards_list             : array   — ordered list of certified token names
  *
  * Rules:
- *   - set_admin        : first-call-wins; sets admin_address to caller
+ *   - admin_bootstrap   : feature-based; sets admin_address on first boot (no MSB needed)
  *   - certify_card     : admin only
  *   - register_node    : anyone, once per address; first 100 earn genesis status (2× reward)
  *   - heartbeat        : registered nodes only; rate-limited to 1 per hour via Timer oracle
@@ -27,7 +27,6 @@ class UnatrareContract extends Contract {
         super(protocol, options);
 
         // ── No-payload functions ──────────────────────────────────────────────
-        this.addFunction('setAdmin');
         this.addFunction('heartbeat');
         this.addFunction('getAllNodes');
         this.addFunction('getAllCards');
@@ -84,14 +83,19 @@ class UnatrareContract extends Contract {
                 await _this.put('currentTime', _this.op.value);
             }
         });
-    }
 
-    // ── Set Admin — first-call-wins bootstrap ─────────────────────────────────
-    async setAdmin() {
-        const existing = await this.get('admin_address');
-        if (null !== existing) return; // already set; ignore subsequent calls
-        await this.put('admin_address', this.address);
-        console.log('[unatrare] Admin set:', this.address);
+        // ── Admin bootstrap feature — sets admin_address on first boot ────────
+        // Triggered by AdminBootstrap feature in index.js on the writable node.
+        // Does NOT go through MSB; works immediately for the sole writer.
+        this.addFeature('admin_bootstrap_feature', async function () {
+            if (_this.op.key !== 'adminPubkey') return;
+            const existing = await _this.get('admin_address');
+            if (null !== existing) return; // already bootstrapped; idempotent
+            const pubkey = _this.op.value;
+            if (typeof pubkey !== 'string' || pubkey.length < 16) return;
+            await _this.put('admin_address', pubkey);
+            console.log('[unatrare] Admin bootstrapped via feature:', pubkey.slice(0, 8) + '...');
+        });
     }
 
     // ── Certify a card (admin only) ───────────────────────────────────────────

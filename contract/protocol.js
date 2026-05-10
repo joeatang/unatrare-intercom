@@ -143,10 +143,6 @@ class UnatrareProtocol extends Protocol {
         const obj = { type: '', value: null };
 
         // ── No-payload commands ───────────────────────────────────────────────
-        if (command === 'set_admin') {
-            obj.type = 'setAdmin';
-            return obj;
-        }
         if (command === 'heartbeat') {
             obj.type = 'heartbeat';
             return obj;
@@ -198,7 +194,6 @@ class UnatrareProtocol extends Protocol {
     async printOptions() {
         console.log(' ');
         console.log('═══ UNATRARE Contract Commands ══════════════════════════════════════════');
-        console.log("  /tx --command 'set_admin'                                 (first call wins; run once after launch)");
         console.log("  /tx --command 'heartbeat'                                 (registered nodes only; max 1/hour)");
         console.log("  /tx --command 'get_all_nodes'                             (print all registered node addresses)");
         console.log("  /tx --command 'get_all_cards'                             (print all certified cards)");

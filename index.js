@@ -12,6 +12,7 @@ import { Terminal } from 'trac-peer/src/terminal/index.js';
 import UnatrareProtocol from './contract/protocol.js';
 import UnatrareContract from './contract/contract.js';
 import { Timer } from './features/timer/index.js';
+import AdminBootstrap from './features/admin-bootstrap/index.js';
 import Sidechannel from './features/sidechannel/index.js';
 import ScBridge from './features/sc-bridge/index.js';
 import ArtDrive from './features/artdrive/index.js';
@@ -467,7 +468,7 @@ if (scBridgeEnabled) {
 console.log('================================================================');
 console.log('');
 
-// Auto-init timer if this peer is the subnet writer (bootstrap / admin node).
+// Auto-init timer + admin bootstrap if this peer is the subnet writer (bootstrap / admin node).
 // No need to run /add_admin interactively — writable == we are the indexer.
 if (peer.base.writable) {
   const timer = new Timer(peer, { update_interval: 60_000 });
@@ -475,21 +476,11 @@ if (peer.base.writable) {
   timer.start().catch((err) => console.error('Timer feature stopped:', err?.message ?? err));
   console.log('[unatrare] Timer feature started (admin node)');
 
-  // Auto-submit set_admin tx on first boot if contract admin not yet recorded.
-  // Wait 30s for peer to connect to DHT + MSB before submitting.
-  setTimeout(async () => {
-    try {
-      const adminAddr = await peer.protocol.instance.getSigned('admin_address');
-      if (!adminAddr) {
-        await peer.protocol.instance.tx({ command: 'set_admin' });
-        console.log('[unatrare] Auto-submitted set_admin tx — contract admin bootstrapped');
-      } else {
-        console.log('[unatrare] Contract admin already set:', adminAddr.slice(0, 8) + '...');
-      }
-    } catch (err) {
-      console.warn('[unatrare] Auto set_admin failed (will retry on next restart):', err?.message ?? err);
-    }
-  }, 30_000);
+  // AdminBootstrap feature — sets admin_address via Feature mechanism (no MSB needed).
+  // Works immediately for the sole writer. Idempotent on subsequent restarts.
+  const adminBootstrap = new AdminBootstrap(peer);
+  await peer.protocol.instance.addFeature('admin_bootstrap', adminBootstrap);
+  adminBootstrap.start().catch((err) => console.warn('[unatrare] AdminBootstrap error:', err?.message ?? err));
 }
 
 let scBridge = null;
