@@ -421,7 +421,6 @@ const peer = new Peer({
   wallet: new Wallet(),
   protocol: UnatrareProtocol,
   contract: UnatrareContract,
-  api_tx_exposed: true,  // allow programmatic tx from index.js bootstrap
 });
 await peer.ready();
 
@@ -477,17 +476,20 @@ if (peer.base.writable) {
   console.log('[unatrare] Timer feature started (admin node)');
 
   // Auto-submit set_admin tx on first boot if contract admin not yet recorded.
+  // Wait 30s for peer to connect to DHT + MSB before submitting.
   setTimeout(async () => {
     try {
       const adminAddr = await peer.protocol.instance.getSigned('admin_address');
-      if (!adminAddr && peer.protocol.instance.api?.tx) {
-        await peer.protocol.instance.api.tx('set_admin');
+      if (!adminAddr) {
+        await peer.protocol.instance.tx({ command: 'set_admin' });
         console.log('[unatrare] Auto-submitted set_admin tx — contract admin bootstrapped');
+      } else {
+        console.log('[unatrare] Contract admin already set:', adminAddr.slice(0, 8) + '...');
       }
     } catch (err) {
       console.warn('[unatrare] Auto set_admin failed (will retry on next restart):', err?.message ?? err);
     }
-  }, 8_000); // wait 8s for peer to connect to DHT peers before submitting
+  }, 30_000);
 }
 
 let scBridge = null;
