@@ -32,15 +32,6 @@ class AdminBootstrap extends Feature {
 
         await this.append('adminPubkey', adminPubkey);
         console.log('[unatrare] Admin bootstrap feature appended:', adminPubkey.slice(0, 8) + '...');
-
-        // Wait for the indexer to process the appended feature entry, then verify
-        await this.sleep(5000);
-        const after = await this.getSigned('admin_address');
-        if (after !== null) {
-            console.log('[unatrare] Admin bootstrapped confirmed in state:', String(after).slice(0, 8) + '...');
-        } else {
-            console.warn('[unatrare] Admin bootstrap feature appended but admin_address NOT in state after 5s — check contract handler');
-        }
     }
 
     async stop(options = {}) {}
