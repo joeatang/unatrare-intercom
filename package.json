@@ -8,6 +8,7 @@
     "type": "terminal"
   },
   "dependencies": {
+    "bare-fetch": "^1.0.0",
     "b4a": "^1.6.7",
     "corestore": "^6.0.0",
     "hyperdrive": "^11.0.0",

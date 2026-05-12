@@ -1,4 +1,5 @@
 /** @typedef {import('pear-interface')} */
+import fetch from 'bare-fetch';
 import fs from 'fs';
 import path from 'path';
 import b4a from 'b4a';
