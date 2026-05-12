@@ -28,20 +28,21 @@ When you run a node:
 npm install -g pear
 
 # 2. Clone this repo
-git clone https://github.com/joeatang/UNATRARE
-cd UNATRARE/intercom
+git clone https://github.com/joeatang/unatrare-intercom node
+cd node
 
 # 3. Install dependencies
 npm install
 
-# 4. Run the node (joins the unatrare-v1 subnet automatically)
+# 4. Run the node
 pear run . \
   --peer-store-name unatrare-node \
-  --msb-store-name unatrare-node-msb \
-  --subnet-channel unatrare-v1
+  --subnet-bootstrap 38a1b001756148f3f96f8cff7bd38d2924669f5c1880b4f779512d6449cfff56 \
+  --btc-address YOUR_BITCOIN_ADDRESS
 ```
 
-That's it. The node will discover peers on the UNATRARE subnet via HyperDHT and begin replicating art files.
+`--subnet-bootstrap` connects you to the UNATRARE subnet (required).  
+`--btc-address` registers your node on unatrare.wtf/nodes and qualifies you for future rewards.
 
 ---
 
@@ -72,7 +73,10 @@ Art is stored at `/art/{sha256_hash}` in Hyperdrive. The hash is the content add
 
 ```bash
 # Using PM2
-pm2 start "pear run . --peer-store-name unatrare-node --msb-store-name unatrare-node-msb --subnet-channel unatrare-v1" \
+pm2 start "pear run . \
+  --peer-store-name unatrare-node \
+  --subnet-bootstrap 38a1b001756148f3f96f8cff7bd38d2924669f5c1880b4f779512d6449cfff56 \
+  --btc-address YOUR_BITCOIN_ADDRESS" \
   --name unatrare-node
 
 pm2 save

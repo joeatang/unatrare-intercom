@@ -47,6 +47,11 @@ const subnetChannel =
   env.SUBNET_CHANNEL ||
   'unatrare-art-archive-v1';
 
+const btcAddress =
+  (flags['btc-address'] && String(flags['btc-address'])) ||
+  env.BTC_ADDRESS ||
+  '';
+
 const sidechannelsRaw =
   (flags['sidechannels'] && String(flags['sidechannels'])) ||
   (flags['sidechannel'] && String(flags['sidechannel'])) ||
@@ -635,6 +640,43 @@ sidechannel
   .start()
   .then(() => {
     console.log('Sidechannel: ready');
+
+    // ── Auto-register this node with UNATRARE registry ───────────────
+    // Requires --btc-address flag. Idempotent on every restart.
+    const pubkey = typeof peer.wallet.publicKey === 'string'
+      ? peer.wallet.publicKey
+      : Buffer.from(peer.wallet.publicKey).toString('hex');
+
+    if (btcAddress) {
+      const REGISTRY = 'https://unatrare.wtf/api/nodes';
+
+      const register = () =>
+        fetch(`${REGISTRY}/register`, {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ pubkey, btc_address: btcAddress }),
+        })
+        .then(r => r.json())
+        .then(data => {
+          if (data.ok) console.log(`[unatrare] Node registered: ${pubkey.slice(0, 8)}...${data.is_genesis ? ' (GENESIS)' : ''}`);
+          else         console.warn('[unatrare] Registration failed:', data.error);
+        })
+        .catch(err => console.warn('[unatrare] Registration error:', err?.message ?? err));
+
+      const heartbeat = () =>
+        fetch(`${REGISTRY}/heartbeat`, {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ pubkey }),
+        })
+        .catch(() => {});
+
+      register();
+      heartbeat();
+      setInterval(heartbeat, 3_600_000); // every hour
+    } else {
+      console.log(`[unatrare] Node pubkey: ${pubkey.slice(0, 8)}... (pass --btc-address to register)`);
+    }
   })
   .catch((err) => {
     console.error('Sidechannel failed to start:', err?.message ?? err);
