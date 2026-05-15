@@ -1,0 +1,60 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# UNATRARE Deep Node — Docker Compose
+#
+# Quick start:
+#
+#   1. Copy .env.example to .env and fill in your addresses
+#   2. docker compose up -d
+#   3. docker compose logs -f     (watch the node connect to peers)
+#
+# Update to the latest node software:
+#   docker compose down && docker compose build --no-cache && docker compose up -d
+#
+# View connected peers:
+#   docker compose exec unatrare-node pear run /app --help
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+  unatrare-node:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: unatrare-node:latest
+    container_name: unatrare-node
+    restart: unless-stopped
+
+    environment:
+      # ── Required ─────────────────────────────────────────────────────────
+      # Your Bitcoin address — used to register your node on unatrare.wtf/nodes
+      # and to qualify for future operator rewards.
+      - BTC_ADDRESS=${BTC_ADDRESS:?BTC_ADDRESS is required — see .env.example}
+
+      # ── Optional ──────────────────────────────────────────────────────────
+      # Your Counterparty (XCP) address — shown on your node card.
+      - XCP_ADDRESS=${XCP_ADDRESS:-}
+      # Your TAP Protocol address — for future UNATPEPE holder rewards.
+      - TAP_ADDRESS=${TAP_ADDRESS:-}
+
+    volumes:
+      # Peer state: Hypercore storage, art cache, DHT routing tables.
+      # Remove this volume only if you want to start the node from scratch.
+      - node-stores:/data/stores
+
+      # Pear platform cache.
+      # Avoids re-downloading the Pear runtime on every container restart.
+      - pear-cache:/root/.pear
+
+    # ── Networking ───────────────────────────────────────────────────────────
+    # Hyperswarm uses UDP hole-punching for peer discovery and works through
+    # NAT without any port-forwarding — no ports need to be published.
+    #
+    # On Linux hosts (VPS / bare metal), uncomment the line below for slightly
+    # better UDP performance. Do NOT use on Windows or macOS Docker Desktop.
+    #
+    # network_mode: host
+
+volumes:
+  node-stores:
+    name: unatrare-node-stores
+  pear-cache:
+    name: unatrare-pear-cache

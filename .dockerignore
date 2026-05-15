@@ -1,0 +1,29 @@
+# ── Never copy local state into the image ────────────────────────────────────
+node_modules/
+stores/
+*.pid
+*.log
+
+# ── Git metadata ──────────────────────────────────────────────────────────────
+.git/
+.gitignore
+
+# ── Env files with secrets ───────────────────────────────────────────────────
+.env
+.env.local
+.env.*.local
+
+# ── Keys ─────────────────────────────────────────────────────────────────────
+# Node identity keypair — generated on first run and stored in the volume.
+# Never bake keys into an image.
+unatrare-keys.json
+
+# ── Docker files themselves (don't need to copy into the image) ───────────────
+Dockerfile
+.dockerignore
+docker-compose.yml
+.env.example
+
+# ── Misc ──────────────────────────────────────────────────────────────────────
+.DS_Store
+*.swp

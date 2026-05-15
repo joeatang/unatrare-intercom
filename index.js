@@ -53,6 +53,16 @@ const btcAddress =
   env.BTC_ADDRESS ||
   '';
 
+const xcpAddress =
+  (flags['xcp-address'] && String(flags['xcp-address'])) ||
+  env.XCP_ADDRESS ||
+  '';
+
+const tapAddress =
+  (flags['tap-address'] && String(flags['tap-address'])) ||
+  env.TAP_ADDRESS ||
+  '';
+
 const sidechannelsRaw =
   (flags['sidechannels'] && String(flags['sidechannels'])) ||
   (flags['sidechannel'] && String(flags['sidechannel'])) ||
@@ -648,19 +658,30 @@ sidechannel
       ? peer.wallet.publicKey
       : Buffer.from(peer.wallet.publicKey).toString('hex');
 
-    if (btcAddress) {
+    if (xcpAddress || btcAddress) {
       const REGISTRY = 'https://unatrare.wtf/api/nodes';
 
       const register = () =>
         fetch(`${REGISTRY}/register`, {
           method:  'POST',
           headers: { 'Content-Type': 'application/json' },
-          body:    JSON.stringify({ pubkey, btc_address: btcAddress }),
+          body:    JSON.stringify({
+            pubkey,
+            btc_address: btcAddress,
+            xcp_address: xcpAddress,
+            tap_address: tapAddress,
+          }),
         })
         .then(r => r.json())
         .then(data => {
-          if (data.ok) console.log(`[unatrare] Node registered: ${pubkey.slice(0, 8)}...${data.is_genesis ? ' (GENESIS)' : ''}`);
-          else         console.warn('[unatrare] Registration failed:', data.error);
+          if (data.ok) {
+            const tag = data.is_genesis
+              ? (data.genesis_provisional ? ' [GENESIS PENDING — heartbeating toward confirmation]' : ' [GENESIS CONFIRMED]')
+              : (data.genesis_slots ? ` [${data.genesis_slots.available} genesis slots remain]` : '');
+            console.log(`[unatrare] Node registered: ${pubkey.slice(0, 8)}...${tag}`);
+          } else {
+            console.warn('[unatrare] Registration failed:', data.error);
+          }
         })
         .catch(err => console.warn('[unatrare] Registration error:', err?.message ?? err));
 
@@ -670,13 +691,18 @@ sidechannel
           headers: { 'Content-Type': 'application/json' },
           body:    JSON.stringify({ pubkey }),
         })
+        .then(r => r.json())
+        .then(data => {
+          if (data.genesis_just_confirmed)
+            console.log(`[unatrare] GENESIS CONFIRMED — slot #${data.slot_number}!`);
+        })
         .catch(() => {});
 
       register();
       heartbeat();
       setInterval(heartbeat, 3_600_000); // every hour
     } else {
-      console.log(`[unatrare] Node pubkey: ${pubkey.slice(0, 8)}... (pass --btc-address to register)`);
+      console.log(`[unatrare] Node pubkey: ${pubkey.slice(0, 8)}... (pass --xcp-address YOUR_XCP_ADDR to register)`);
     }
   })
   .catch((err) => {
