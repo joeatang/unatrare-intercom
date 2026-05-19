@@ -27,7 +27,7 @@ SC_BRIDGE_TOKEN="${SC_BRIDGE_TOKEN:-3f113ec0131dfff2e0bcb73146ee8339b43279b22411
 
 echo "========================================"
 echo "  UNATRARE Intercom Peer Starting"
-echo "  Subnet:    unatrare-v1"
+echo "  Subnet:    unatrare-art-archive-v1"
 echo "  SC-Bridge: ws://127.0.0.1:49222"
 echo "  Node:      $(node -v)"
 echo "========================================"
@@ -35,7 +35,7 @@ echo "========================================"
 pear run . \
   --peer-store-name    unatrare-admin \
   --msb-store-name     unatrare-admin-msb \
-  --subnet-channel     unatrare-v1 \
+  --subnet-channel     unatrare-art-archive-v1 \
   --sidechannels       unatrare-verdicts,unatrare-query \
   --sc-bridge          1 \
   --sc-bridge-port     49222 \

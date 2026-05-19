@@ -48,7 +48,7 @@ pear run . \
 
 ## What happens when you run it
 
-1. **Peer discovery** — your node announces itself on the `unatrare-v1` channel of the Hyperswarm DHT
+1. **Peer discovery** — your node announces itself on the `unatrare-art-archive-v1` channel of the Hyperswarm DHT
 2. **Art replication** — any certified card art stored in Hyperdrive is replicated to your local store
 3. **Serving** — if the main UNATRARE server is unreachable, wallets fetching `/art/{hash}` can fall back to any online peer
 4. **Verdict broadcast** — new judgments from the pepai scientist panel are broadcast to all connected peers in real time
@@ -61,7 +61,7 @@ UNATRARE uses three networking planes from the Intercom stack:
 
 | Plane | Purpose |
 |-------|---------|
-| **Subnet** (`unatrare-v1`) | Hyperbee/Autobase state replication — certified cards, verdicts |
+| **Subnet** (`unatrare-art-archive-v1`) | Hyperbee/Autobase state replication — certified cards, verdicts |
 | **Sidechannel** | Ephemeral P2P messaging — real-time verdict broadcasts |
 | **Hyperdrive** | Content-addressed art storage — `/art/{sha256}` files |
 
