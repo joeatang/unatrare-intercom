@@ -125,6 +125,23 @@ class UnatrareProtocol extends Protocol {
             cards: (await self.getSigned('cards_list'))?.length ?? 0,
             currentTime: await self.getSigned('currentTime'),
         });
+
+        // ── Marketplace read helpers (SC-Bridge / Next.js) ───────────────────
+        this.api.getListing       = async (id)     => self.getSigned('listings/' + id);
+        this.api.getListingsList  = async ()       => self.getSigned('listings_list');
+        this.api.getListingsBySeller = async (addr) => self.getSigned('listings_by_seller/' + addr);
+        this.api.getSale          = async (txid)   => self.getSigned('sales/' + txid);
+        this.api.getSalesList     = async ()       => self.getSigned('sales_list');
+        // Hydrate every active listing in one call (what the marketplace page needs).
+        this.api.getActiveListings = async () => {
+            const ids = (await self.getSigned('listings_list')) ?? [];
+            const out = [];
+            for (const id of ids) {
+                const l = await self.getSigned('listings/' + id);
+                if (l && l.status === 'active') out.push(l);
+            }
+            return out;
+        };
     }
 
     /**
@@ -183,6 +200,14 @@ class UnatrareProtocol extends Protocol {
             return obj;
         }
 
+        // ── Marketplace commands ──────────────────────────────────────────────
+        if (command === 'get_all_listings') { obj.type = 'getAllListings'; return obj; }
+        if (command === 'get_all_sales')    { obj.type = 'getAllSales';    return obj; }
+        if (json.op === 'create_listing') { obj.type = 'createListing'; obj.value = json; return obj; }
+        if (json.op === 'cancel_listing') { obj.type = 'cancelListing'; obj.value = json; return obj; }
+        if (json.op === 'record_sale')    { obj.type = 'recordSale';    obj.value = json; return obj; }
+        if (json.op === 'get_listing')    { obj.type = 'getListing';    obj.value = json; return obj; }
+
         return null;
     }
 
@@ -202,6 +227,14 @@ class UnatrareProtocol extends Protocol {
         console.log("  /tx --command '{ \"op\": \"register_node\", \"btc_address\": \"bc1q...\" }'");
         console.log("  /tx --command '{ \"op\": \"get_node_state\", \"pubkey\": \"<pubkey-hex>\" }'");
         console.log("  /tx --command '{ \"op\": \"get_card\", \"token_name\": \"RAREUNATPEPE\" }'");
+        console.log(' ');
+        console.log('═══ UNATRARE Marketplace Commands ═══════════════════════════════════════');
+        console.log("  /tx --command '{ \"op\": \"create_listing\", \"listing_id\": \"lst_...\", \"token_name\": \"CASTLEPEPE\", \"price\": \"12\", \"currency\": \"XCP\" }'  (seller = you; token must be certified)");
+        console.log("  /tx --command '{ \"op\": \"cancel_listing\", \"listing_id\": \"lst_...\" }'   (seller only)");
+        console.log("  /tx --command '{ \"op\": \"record_sale\", \"listing_id\": \"lst_...\", \"buyer_address\": \"...\", \"txid\": \"<64-hex>\" }'  (seller records the on-Bitcoin settlement)");
+        console.log("  /tx --command 'get_all_listings'                          (print all listing ids)");
+        console.log("  /tx --command 'get_all_sales'                             (print provenance ledger)");
+        console.log("  /tx --command '{ \"op\": \"get_listing\", \"listing_id\": \"lst_...\" }'");
         console.log(' ');
         console.log('═══ System Commands ════════════════════════════════════════════════════');
         console.log('  /get --key "<key>" [--confirmed true|false]               (read contract state)');

@@ -1,4 +1,5 @@
 import {Contract} from 'trac-peer'
+import { MARKETPLACE_SCHEMAS, createListing, cancelListing, recordSale } from './marketplace.js'
 
 /**
  * UNATRARE Contract — TRAC R1 Subnet
@@ -69,6 +70,14 @@ class UnatrareContract extends Contract {
                 token_name: { type: 'string', min: 1, max: 21 },
             }
         });
+
+        // ── Marketplace: listings + provenance (Phase 1) ─────────────────────
+        this.addSchema('createListing', MARKETPLACE_SCHEMAS.createListing);
+        this.addSchema('cancelListing', MARKETPLACE_SCHEMAS.cancelListing);
+        this.addSchema('recordSale',    MARKETPLACE_SCHEMAS.recordSale);
+        this.addSchema('getListing',    MARKETPLACE_SCHEMAS.getListing);
+        this.addFunction('getAllListings');
+        this.addFunction('getAllSales');
 
         // ── Timer feature (currentTime oracle — only active on admin node) ────
         this.addSchema('feature_entry', {
@@ -215,6 +224,31 @@ class UnatrareContract extends Contract {
             currentTime: currentTime ?? null,
             admin:       admin ? admin.slice(0, 8) + '...' : null,
         });
+    }
+
+    // ── Marketplace writes (delegate to the deterministic module) ────────────
+    async createListing() { await createListing(this); }
+    async cancelListing() { await cancelListing(this); }
+    async recordSale()    { await recordSale(this); }
+
+    // ── Read: single listing ───────────────────────────────────────────────
+    async getListing() {
+        const id = this.value?.listing_id;
+        if (!id) return;
+        const listing = await this.get('listings/' + id);
+        console.log('[unatrare] listing/' + id + ':', listing);
+    }
+
+    // ── Read: all listing ids ───────────────────────────────────────────────
+    async getAllListings() {
+        const list = await this.get('listings_list');
+        console.log('[unatrare] listings (' + (list?.length ?? 0) + '):', list);
+    }
+
+    // ── Read: all sale txids (provenance ledger) ─────────────────────────────
+    async getAllSales() {
+        const list = await this.get('sales_list');
+        console.log('[unatrare] sales (' + (list?.length ?? 0) + '):', list);
     }
 }
 

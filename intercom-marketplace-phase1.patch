@@ -1,0 +1,399 @@
+diff --git a/contract/contract.js b/contract/contract.js
+index 89f3ae7..55ab011 100644
+--- a/contract/contract.js
++++ b/contract/contract.js
+@@ -1,4 +1,5 @@
+ import {Contract} from 'trac-peer'
++import { MARKETPLACE_SCHEMAS, createListing, cancelListing, recordSale } from './marketplace.js'
+ 
+ /**
+  * UNATRARE Contract — TRAC R1 Subnet
+@@ -70,6 +71,14 @@ class UnatrareContract extends Contract {
+             }
+         });
+ 
++        // ── Marketplace: listings + provenance (Phase 1) ─────────────────────
++        this.addSchema('createListing', MARKETPLACE_SCHEMAS.createListing);
++        this.addSchema('cancelListing', MARKETPLACE_SCHEMAS.cancelListing);
++        this.addSchema('recordSale',    MARKETPLACE_SCHEMAS.recordSale);
++        this.addSchema('getListing',    MARKETPLACE_SCHEMAS.getListing);
++        this.addFunction('getAllListings');
++        this.addFunction('getAllSales');
++
+         // ── Timer feature (currentTime oracle — only active on admin node) ────
+         this.addSchema('feature_entry', {
+             key:   { type: 'string', min: 1, max: 256 },
+@@ -216,6 +225,31 @@ class UnatrareContract extends Contract {
+             admin:       admin ? admin.slice(0, 8) + '...' : null,
+         });
+     }
++
++    // ── Marketplace writes (delegate to the deterministic module) ────────────
++    async createListing() { await createListing(this); }
++    async cancelListing() { await cancelListing(this); }
++    async recordSale()    { await recordSale(this); }
++
++    // ── Read: single listing ───────────────────────────────────────────────
++    async getListing() {
++        const id = this.value?.listing_id;
++        if (!id) return;
++        const listing = await this.get('listings/' + id);
++        console.log('[unatrare] listing/' + id + ':', listing);
++    }
++
++    // ── Read: all listing ids ───────────────────────────────────────────────
++    async getAllListings() {
++        const list = await this.get('listings_list');
++        console.log('[unatrare] listings (' + (list?.length ?? 0) + '):', list);
++    }
++
++    // ── Read: all sale txids (provenance ledger) ─────────────────────────────
++    async getAllSales() {
++        const list = await this.get('sales_list');
++        console.log('[unatrare] sales (' + (list?.length ?? 0) + '):', list);
++    }
+ }
+ 
+ export default UnatrareContract;
+diff --git a/contract/marketplace.js b/contract/marketplace.js
+new file mode 100644
+index 0000000..1477333
+--- /dev/null
++++ b/contract/marketplace.js
+@@ -0,0 +1,164 @@
++/**
++ * UNATRARE Marketplace — contract extension (Phase 1: listings + provenance)
++ *
++ * Deterministic, MSB-free. Follows the same invariants as the base contract:
++ *   No try-catch · No throws · No random · No HTTP · No Date.now()
++ *   Time comes from the Timer oracle stored in 'currentTime'.
++ *   Value settles OFF-subnet on Bitcoin/Counterparty; the subnet is the
++ *   canonical LEDGER of what's for sale and what sold (provenance), not a
++ *   custodian of funds.
++ *
++ * State layout (added):
++ *   listings/{id}            : { id, seller, token_name, price, currency,
++ *                                status:'active'|'sold'|'cancelled',
++ *                                created_at, updated_at }
++ *   listings_list            : array of listing ids (ordered)
++ *   listings_by_seller/{addr}: array of listing ids owned by a seller
++ *   sales/{txid}             : { txid, listing_id, token_name, seller, buyer,
++ *                                price, currency, sold_at } — the provenance record
++ *   sales_list               : array of sale txids (ordered)
++ *
++ * Each function takes the contract instance `c` and uses:
++ *   c.get / c.put / c.assert / c.protocol.safeClone / c.address / c.value
++ * so the pure logic is unit-testable with a mock context (see marketplace.test.js).
++ */
++
++// Schemas registered on the contract via addSchema(name, {value:{...}}).
++export const MARKETPLACE_SCHEMAS = {
++  createListing: {
++    value: {
++      $$strict: true,
++      $$type: 'object',
++      op:         { type: 'string', min: 1, max: 128 },
++      listing_id: { type: 'string', min: 8, max: 80, pattern: /^[a-zA-Z0-9._-]+$/ },
++      token_name: { type: 'string', min: 1, max: 21, pattern: /^[A-Z0-9.]+$/ },
++      price:      { type: 'string', min: 1, max: 40, pattern: /^[0-9]+(\.[0-9]+)?$/ },
++      currency:   { type: 'string', min: 2, max: 12, pattern: /^[A-Z0-9]+$/ },
++    },
++  },
++  cancelListing: {
++    value: {
++      $$strict: true,
++      $$type: 'object',
++      op:         { type: 'string', min: 1, max: 128 },
++      listing_id: { type: 'string', min: 8, max: 80, pattern: /^[a-zA-Z0-9._-]+$/ },
++    },
++  },
++  recordSale: {
++    value: {
++      $$strict: true,
++      $$type: 'object',
++      op:            { type: 'string', min: 1, max: 128 },
++      listing_id:    { type: 'string', min: 8, max: 80, pattern: /^[a-zA-Z0-9._-]+$/ },
++      buyer_address: { type: 'string', min: 20, max: 120 },
++      txid:          { type: 'string', min: 64, max: 64, pattern: /^[a-fA-F0-9]+$/ },
++    },
++  },
++  getListing: {
++    value: {
++      $$strict: true,
++      $$type: 'object',
++      op:         { type: 'string', min: 1, max: 128 },
++      listing_id: { type: 'string', min: 8, max: 80 },
++    },
++  },
++};
++
++// ── Create a listing (seller = caller; token must be a certified card) ──────
++export async function createListing(c) {
++  const id = c.value.listing_id;
++
++  // Idempotent: never overwrite an existing listing id.
++  const existing = await c.get('listings/' + id);
++  if (existing !== null) return;
++
++  // Gate: only Council-certified cards can be listed. Ties listings to the
++  // same provenance authority that certifies art.
++  const card = await c.get('cards/' + c.value.token_name);
++  if (card === null) return; // uncertified token — reject silently (no throw)
++
++  const now = await c.get('currentTime');
++  const listing = {
++    id,
++    seller:     c.address,           // the signer IS the seller — non-spoofable
++    token_name: c.value.token_name,
++    price:      c.value.price,       // decimal string; settled on Bitcoin
++    currency:   c.value.currency,
++    status:     'active',
++    created_at: now ?? null,
++    updated_at: now ?? null,
++  };
++
++  const list        = (await c.get('listings_list')) ?? [];
++  const updatedList = c.protocol.safeClone(list);
++  c.assert(updatedList !== null);
++  updatedList.push(id);
++
++  const sellerKey  = 'listings_by_seller/' + c.address;
++  const sellerList = (await c.get(sellerKey)) ?? [];
++  const updSeller  = c.protocol.safeClone(sellerList);
++  c.assert(updSeller !== null);
++  updSeller.push(id);
++
++  await c.put('listings/' + id, listing);
++  await c.put('listings_list', updatedList);
++  await c.put(sellerKey, updSeller);
++}
++
++// ── Cancel a listing (seller only) ──────────────────────────────────────────
++export async function cancelListing(c) {
++  const id      = c.value.listing_id;
++  const listing = await c.get('listings/' + id);
++  if (listing === null) return;             // no such listing
++  if (listing.seller !== c.address) return; // only the seller can cancel
++  if (listing.status !== 'active') return;  // already sold/cancelled — idempotent
++
++  const now     = await c.get('currentTime');
++  const updated = c.protocol.safeClone(listing);
++  c.assert(updated !== null);
++  updated.status     = 'cancelled';
++  updated.updated_at = now ?? null;
++
++  await c.put('listings/' + id, updated);
++}
++
++// ── Record a sale (seller confirms the on-Bitcoin settlement → provenance) ──
++export async function recordSale(c) {
++  const id      = c.value.listing_id;
++  const listing = await c.get('listings/' + id);
++  if (listing === null) return;
++  if (listing.seller !== c.address) return; // only the seller records their sale
++  if (listing.status !== 'active') return;  // can't sell a sold/cancelled listing
++
++  const txid = c.value.txid.toLowerCase();
++
++  // Idempotent: a txid can back exactly one sale record.
++  const existingSale = await c.get('sales/' + txid);
++  if (existingSale !== null) return;
++
++  const now = await c.get('currentTime');
++  const sale = {
++    txid,
++    listing_id: id,
++    token_name: listing.token_name,
++    seller:     listing.seller,
++    buyer:      c.value.buyer_address,
++    price:      listing.price,
++    currency:   listing.currency,
++    sold_at:    now ?? null,
++  };
++
++  const salesList = (await c.get('sales_list')) ?? [];
++  const updSales  = c.protocol.safeClone(salesList);
++  c.assert(updSales !== null);
++  updSales.push(txid);
++
++  const updListing = c.protocol.safeClone(listing);
++  c.assert(updListing !== null);
++  updListing.status     = 'sold';
++  updListing.updated_at = now ?? null;
++
++  await c.put('sales/' + txid, sale);
++  await c.put('sales_list', updSales);
++  await c.put('listings/' + id, updListing);
++}
+diff --git a/contract/marketplace.test.js b/contract/marketplace.test.js
+new file mode 100644
+index 0000000..b886499
+--- /dev/null
++++ b/contract/marketplace.test.js
+@@ -0,0 +1,108 @@
++// Unit test for the marketplace contract logic — mocks the contract context
++// (Map-backed state) so the deterministic rules are provable without Pear/MSB.
++// Run: node contract/marketplace.test.js
++
++import { createListing, cancelListing, recordSale } from './marketplace.js';
++
++let passed = 0, failed = 0;
++const ok  = (cond, msg) => { if (cond) { passed++; } else { failed++; console.error('  ✗ FAIL:', msg); } };
++
++// Mock contract context. `address` = the signing caller; `value` = the payload.
++function makeCtx({ address, value, seed = {} }) {
++  const state = new Map(Object.entries(seed));
++  return {
++    address,
++    value,
++    _state: state,
++    async get(k) { return state.has(k) ? state.get(k) : null; },
++    async put(k, v) { state.set(k, v); },
++    assert(cond) { if (!cond) throw new Error('assert failed'); },
++    protocol: { safeClone: (v) => JSON.parse(JSON.stringify(v)) },
++  };
++}
++
++const CERT = { cards: { 'CASTLEPEPE': { token_name: 'CASTLEPEPE', art_hash: 'ab'.repeat(32) } } };
++// Seed helper: certified card + a clock.
++const seedCertified = () => ({ 'cards/CASTLEPEPE': CERT.cards.CASTLEPEPE, currentTime: 1000 });
++
++(async () => {
++  // 1. Happy path: create a listing on a certified card.
++  {
++    const c = makeCtx({ address: 'alice', seed: seedCertified(),
++      value: { op: 'createListing', listing_id: 'lst_castle_001', token_name: 'CASTLEPEPE', price: '12', currency: 'XCP' } });
++    await createListing(c);
++    const l = await c.get('listings/lst_castle_001');
++    ok(l && l.seller === 'alice' && l.status === 'active' && l.price === '12' && l.currency === 'XCP', 'creates active listing, seller=caller');
++    ok(JSON.stringify(await c.get('listings_list')) === JSON.stringify(['lst_castle_001']), 'listings_list updated');
++    ok(JSON.stringify(await c.get('listings_by_seller/alice')) === JSON.stringify(['lst_castle_001']), 'seller index updated');
++    ok(l.created_at === 1000, 'created_at from oracle, not Date.now');
++  }
++
++  // 2. Reject listing an UNCERTIFIED token.
++  {
++    const c = makeCtx({ address: 'alice', seed: { currentTime: 1000 },
++      value: { op: 'createListing', listing_id: 'lst_fake_001', token_name: 'NOTACARD', price: '12', currency: 'XCP' } });
++    await createListing(c);
++    ok(await c.get('listings/lst_fake_001') === null, 'uncertified token cannot be listed');
++  }
++
++  // 3. Idempotent create: second create with same id is a no-op (no dup in list).
++  {
++    const c = makeCtx({ address: 'alice', seed: seedCertified(),
++      value: { op: 'createListing', listing_id: 'lst_castle_001', token_name: 'CASTLEPEPE', price: '12', currency: 'XCP' } });
++    await createListing(c);
++    await createListing(c);
++    ok((await c.get('listings_list')).length === 1, 'duplicate create id is a no-op');
++  }
++
++  // 4. Cancel: only the seller can cancel; non-seller is ignored.
++  {
++    const c = makeCtx({ address: 'alice', seed: seedCertified(),
++      value: { op: 'createListing', listing_id: 'lst_castle_002', token_name: 'CASTLEPEPE', price: '5', currency: 'PEPECASH' } });
++    await createListing(c);
++    // mallory tries to cancel alice's listing
++    c.address = 'mallory'; c.value = { op: 'cancelListing', listing_id: 'lst_castle_002' };
++    await cancelListing(c);
++    ok((await c.get('listings/lst_castle_002')).status === 'active', 'non-seller cannot cancel');
++    // alice cancels her own
++    c.address = 'alice';
++    await cancelListing(c);
++    ok((await c.get('listings/lst_castle_002')).status === 'cancelled', 'seller can cancel');
++  }
++
++  // 5. recordSale: seller records the on-Bitcoin settlement → provenance; listing → sold.
++  {
++    const c = makeCtx({ address: 'alice', seed: seedCertified(),
++      value: { op: 'createListing', listing_id: 'lst_castle_003', token_name: 'CASTLEPEPE', price: '12', currency: 'XCP' } });
++    await createListing(c);
++    const txid = 'cd'.repeat(32);
++    c.value = { op: 'recordSale', listing_id: 'lst_castle_003', buyer_address: 'bob', txid };
++    await recordSale(c);
++    const sale = await c.get('sales/' + txid);
++    ok(sale && sale.buyer === 'bob' && sale.seller === 'alice' && sale.price === '12', 'sale provenance recorded');
++    ok((await c.get('listings/lst_castle_003')).status === 'sold', 'listing marked sold');
++    ok(JSON.stringify(await c.get('sales_list')) === JSON.stringify([txid]), 'sales_list updated');
++    // idempotent: same txid again is a no-op
++    await recordSale(c);
++    ok((await c.get('sales_list')).length === 1, 'duplicate sale txid is a no-op');
++  }
++
++  // 6. Can't sell a cancelled listing; non-seller can't record a sale.
++  {
++    const c = makeCtx({ address: 'alice', seed: seedCertified(),
++      value: { op: 'createListing', listing_id: 'lst_castle_004', token_name: 'CASTLEPEPE', price: '9', currency: 'CASH' } });
++    await createListing(c);
++    c.address = 'mallory';
++    c.value = { op: 'recordSale', listing_id: 'lst_castle_004', buyer_address: 'bob', txid: 'ef'.repeat(32) };
++    await recordSale(c);
++    ok(await c.get('sales/' + 'ef'.repeat(32)) === null, 'non-seller cannot record a sale');
++    c.address = 'alice'; c.value = { op: 'cancelListing', listing_id: 'lst_castle_004' };
++    await cancelListing(c);
++    c.value = { op: 'recordSale', listing_id: 'lst_castle_004', buyer_address: 'bob', txid: 'ef'.repeat(32) };
++    await recordSale(c);
++    ok(await c.get('sales/' + 'ef'.repeat(32)) === null, 'cannot sell a cancelled listing');
++  }
++
++  console.log(`\n${failed === 0 ? '✅' : '❌'} marketplace contract: ${passed} passed, ${failed} failed`);
++  process.exit(failed === 0 ? 0 : 1);
++})();
+diff --git a/contract/protocol.js b/contract/protocol.js
+index 9a4ea7e..ee5319b 100644
+--- a/contract/protocol.js
++++ b/contract/protocol.js
+@@ -125,6 +125,23 @@ class UnatrareProtocol extends Protocol {
+             cards: (await self.getSigned('cards_list'))?.length ?? 0,
+             currentTime: await self.getSigned('currentTime'),
+         });
++
++        // ── Marketplace read helpers (SC-Bridge / Next.js) ───────────────────
++        this.api.getListing       = async (id)     => self.getSigned('listings/' + id);
++        this.api.getListingsList  = async ()       => self.getSigned('listings_list');
++        this.api.getListingsBySeller = async (addr) => self.getSigned('listings_by_seller/' + addr);
++        this.api.getSale          = async (txid)   => self.getSigned('sales/' + txid);
++        this.api.getSalesList     = async ()       => self.getSigned('sales_list');
++        // Hydrate every active listing in one call (what the marketplace page needs).
++        this.api.getActiveListings = async () => {
++            const ids = (await self.getSigned('listings_list')) ?? [];
++            const out = [];
++            for (const id of ids) {
++                const l = await self.getSigned('listings/' + id);
++                if (l && l.status === 'active') out.push(l);
++            }
++            return out;
++        };
+     }
+ 
+     /**
+@@ -183,6 +200,14 @@ class UnatrareProtocol extends Protocol {
+             return obj;
+         }
+ 
++        // ── Marketplace commands ──────────────────────────────────────────────
++        if (command === 'get_all_listings') { obj.type = 'getAllListings'; return obj; }
++        if (command === 'get_all_sales')    { obj.type = 'getAllSales';    return obj; }
++        if (json.op === 'create_listing') { obj.type = 'createListing'; obj.value = json; return obj; }
++        if (json.op === 'cancel_listing') { obj.type = 'cancelListing'; obj.value = json; return obj; }
++        if (json.op === 'record_sale')    { obj.type = 'recordSale';    obj.value = json; return obj; }
++        if (json.op === 'get_listing')    { obj.type = 'getListing';    obj.value = json; return obj; }
++
+         return null;
+     }
+ 
+@@ -203,6 +228,14 @@ class UnatrareProtocol extends Protocol {
+         console.log("  /tx --command '{ \"op\": \"get_node_state\", \"pubkey\": \"<pubkey-hex>\" }'");
+         console.log("  /tx --command '{ \"op\": \"get_card\", \"token_name\": \"RAREUNATPEPE\" }'");
+         console.log(' ');
++        console.log('═══ UNATRARE Marketplace Commands ═══════════════════════════════════════');
++        console.log("  /tx --command '{ \"op\": \"create_listing\", \"listing_id\": \"lst_...\", \"token_name\": \"CASTLEPEPE\", \"price\": \"12\", \"currency\": \"XCP\" }'  (seller = you; token must be certified)");
++        console.log("  /tx --command '{ \"op\": \"cancel_listing\", \"listing_id\": \"lst_...\" }'   (seller only)");
++        console.log("  /tx --command '{ \"op\": \"record_sale\", \"listing_id\": \"lst_...\", \"buyer_address\": \"...\", \"txid\": \"<64-hex>\" }'  (seller records the on-Bitcoin settlement)");
++        console.log("  /tx --command 'get_all_listings'                          (print all listing ids)");
++        console.log("  /tx --command 'get_all_sales'                             (print provenance ledger)");
++        console.log("  /tx --command '{ \"op\": \"get_listing\", \"listing_id\": \"lst_...\" }'");
++        console.log(' ');
+         console.log('═══ System Commands ════════════════════════════════════════════════════');
+         console.log('  /get --key "<key>" [--confirmed true|false]               (read contract state)');
+         console.log('  /msb                                                      (print MSB txv + peer info)');
