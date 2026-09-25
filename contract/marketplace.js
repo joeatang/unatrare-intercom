@@ -178,6 +178,8 @@ export async function applyListingFeature(c, op) {
   if (typeof id !== 'string' || id.length < 8) return;
   const now = await c.get('currentTime');
 
+  // NOTE: feature-handler context only guarantees get/put. Do NOT use
+  // this.protocol.safeClone or this.assert here — use plain JS clones.
   if (key === 'listing:create') {
     const existing = await c.get('listings/' + id);
     if (null !== existing) return; // idempotent
@@ -186,8 +188,7 @@ export async function applyListingFeature(c, op) {
       currency: v.currency, status: 'active', created_at: now ?? null, updated_at: now ?? null,
     };
     const list = (await c.get('listings_list')) ?? [];
-    const upd  = c.protocol.safeClone(list);
-    c.assert(upd !== null);
+    const upd  = Array.isArray(list) ? list.slice() : [];
     upd.push(id);
     await c.put('listings/' + id, listing);
     await c.put('listings_list', upd);
@@ -197,10 +198,7 @@ export async function applyListingFeature(c, op) {
   // listing:cancel
   const listing = await c.get('listings/' + id);
   if (null === listing || listing.status !== 'active') return;
-  const updated = c.protocol.safeClone(listing);
-  c.assert(updated !== null);
-  updated.status     = 'cancelled';
-  updated.updated_at = now ?? null;
+  const updated = Object.assign({}, listing, { status: 'cancelled', updated_at: now ?? null });
   await c.put('listings/' + id, updated);
   return 'cancelled';
 }

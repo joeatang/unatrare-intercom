@@ -27,11 +27,16 @@ class Listings extends Feature {
     // back and log — proves the write→replicate→read loop with no stdin needed.
     if (this.seed) {
       await this.createListing(this.seed);
-      await this.sleep(3000);
-      const list = await this.peer.protocol.instance.getSigned('listings_list');
-      const one  = this.seed.listing_id
-        ? await this.peer.protocol.instance.getSigned('listings/' + this.seed.listing_id)
-        : null;
+      // Poll for the contract handler to index the append (a few seconds).
+      let list = null, one = null;
+      for (let i = 0; i < 8; i++) {
+        await this.sleep(2000);
+        list = await this.peer.protocol.instance.getSigned('listings_list');
+        one  = this.seed.listing_id
+          ? await this.peer.protocol.instance.getSigned('listings/' + this.seed.listing_id)
+          : null;
+        if (one) break;
+      }
       console.log('[listings] readback listings_list:', JSON.stringify(list));
       console.log('[listings] readback listing:', JSON.stringify(one));
     }
