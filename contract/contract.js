@@ -110,7 +110,10 @@ class UnatrareContract extends Contract {
         // Fed by the Listings feature (features/listings). Deterministic: the
         // Council node already did HTTP validation before appending, so the
         // handler only shapes + persists state (no HTTP/throws/Date.now here).
-        this.addFeature('listing_feature', async function () {
+        // Handler name MUST equal `<feature-instance-key>_feature`. The instance
+        // is registered as 'listings' in index.js, so the dispatch type (and this
+        // handler) is 'listings_feature' — NOT 'listing_feature'.
+        this.addFeature('listings_feature', async function () {
             const result = await applyListingFeature(_this, _this.op);
             if (result === 'created')   console.log('[unatrare] listing created via feature:', _this.op.value.id);
             if (result === 'cancelled') console.log('[unatrare] listing cancelled via feature:', _this.op.value.id);
