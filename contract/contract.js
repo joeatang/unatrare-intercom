@@ -1,5 +1,5 @@
 import {Contract} from 'trac-peer'
-import { MARKETPLACE_SCHEMAS, createListing, cancelListing, recordSale } from './marketplace.js'
+import { MARKETPLACE_SCHEMAS, createListing, cancelListing, recordSale, applyListingFeature } from './marketplace.js'
 
 /**
  * UNATRARE Contract — TRAC R1 Subnet
@@ -104,6 +104,16 @@ class UnatrareContract extends Contract {
             if (typeof pubkey !== 'string' || pubkey.length < 16) return;
             await _this.put('admin_address', pubkey);
             console.log('[unatrare] Admin bootstrapped via feature:', pubkey.slice(0, 8) + '...');
+        });
+
+        // ── Listing feature — no-MSB marketplace writes (sole-writer/Council) ─
+        // Fed by the Listings feature (features/listings). Deterministic: the
+        // Council node already did HTTP validation before appending, so the
+        // handler only shapes + persists state (no HTTP/throws/Date.now here).
+        this.addFeature('listing_feature', async function () {
+            const result = await applyListingFeature(_this, _this.op);
+            if (result === 'created')   console.log('[unatrare] listing created via feature:', _this.op.value.id);
+            if (result === 'cancelled') console.log('[unatrare] listing cancelled via feature:', _this.op.value.id);
         });
     }
 

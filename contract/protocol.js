@@ -176,37 +176,27 @@ class UnatrareProtocol extends Protocol {
             obj.type = 'getNetworkSnapshot';
             return obj;
         }
-
-        // ── JSON payload commands ─────────────────────────────────────────────
-        const json = this.safeJsonParse(command);
-        if (json.op === 'certify_card') {
-            obj.type  = 'certifyCard';
-            obj.value = json;
-            return obj;
-        }
-        if (json.op === 'register_node') {
-            obj.type  = 'registerNode';
-            obj.value = json;
-            return obj;
-        }
-        if (json.op === 'get_node_state') {
-            obj.type  = 'getNodeState';
-            obj.value = json;
-            return obj;
-        }
-        if (json.op === 'get_card') {
-            obj.type  = 'getCard';
-            obj.value = json;
-            return obj;
-        }
-
-        // ── Marketplace commands ──────────────────────────────────────────────
+        // Marketplace no-payload reads MUST be matched here, BEFORE the JSON
+        // parser (safeJsonParse throws on non-JSON like 'get_all_listings').
         if (command === 'get_all_listings') { obj.type = 'getAllListings'; return obj; }
         if (command === 'get_all_sales')    { obj.type = 'getAllSales';    return obj; }
-        if (json.op === 'create_listing') { obj.type = 'createListing'; obj.value = json; return obj; }
-        if (json.op === 'cancel_listing') { obj.type = 'cancelListing'; obj.value = json; return obj; }
-        if (json.op === 'record_sale')    { obj.type = 'recordSale';    obj.value = json; return obj; }
-        if (json.op === 'get_listing')    { obj.type = 'getListing';    obj.value = json; return obj; }
+
+        // ── JSON payload commands ─────────────────────────────────────────────
+        // Only parse when it actually looks like JSON, and guard every access so
+        // an unknown/typo command returns null instead of crashing the terminal.
+        const json = (typeof command === 'string' && command.trim().startsWith('{'))
+            ? this.safeJsonParse(command)
+            : null;
+        if (json && json.op === 'certify_card') { obj.type = 'certifyCard'; obj.value = json; return obj; }
+        if (json && json.op === 'register_node') { obj.type = 'registerNode'; obj.value = json; return obj; }
+        if (json && json.op === 'get_node_state') { obj.type = 'getNodeState'; obj.value = json; return obj; }
+        if (json && json.op === 'get_card') { obj.type = 'getCard'; obj.value = json; return obj; }
+
+        // ── Marketplace JSON commands ─────────────────────────────────────────
+        if (json && json.op === 'create_listing') { obj.type = 'createListing'; obj.value = json; return obj; }
+        if (json && json.op === 'cancel_listing') { obj.type = 'cancelListing'; obj.value = json; return obj; }
+        if (json && json.op === 'record_sale')    { obj.type = 'recordSale';    obj.value = json; return obj; }
+        if (json && json.op === 'get_listing')    { obj.type = 'getListing';    obj.value = json; return obj; }
 
         return null;
     }

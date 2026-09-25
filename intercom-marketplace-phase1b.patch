@@ -1,0 +1,310 @@
+diff --git a/contract/contract.js b/contract/contract.js
+index 55ab011..9367ea6 100644
+--- a/contract/contract.js
++++ b/contract/contract.js
+@@ -1,5 +1,5 @@
+ import {Contract} from 'trac-peer'
+-import { MARKETPLACE_SCHEMAS, createListing, cancelListing, recordSale } from './marketplace.js'
++import { MARKETPLACE_SCHEMAS, createListing, cancelListing, recordSale, applyListingFeature } from './marketplace.js'
+ 
+ /**
+  * UNATRARE Contract — TRAC R1 Subnet
+@@ -105,6 +105,16 @@ class UnatrareContract extends Contract {
+             await _this.put('admin_address', pubkey);
+             console.log('[unatrare] Admin bootstrapped via feature:', pubkey.slice(0, 8) + '...');
+         });
++
++        // ── Listing feature — no-MSB marketplace writes (sole-writer/Council) ─
++        // Fed by the Listings feature (features/listings). Deterministic: the
++        // Council node already did HTTP validation before appending, so the
++        // handler only shapes + persists state (no HTTP/throws/Date.now here).
++        this.addFeature('listing_feature', async function () {
++            const result = await applyListingFeature(_this, _this.op);
++            if (result === 'created')   console.log('[unatrare] listing created via feature:', _this.op.value.id);
++            if (result === 'cancelled') console.log('[unatrare] listing cancelled via feature:', _this.op.value.id);
++        });
+     }
+ 
+     // ── Certify a card (admin only) ───────────────────────────────────────────
+diff --git a/contract/marketplace.js b/contract/marketplace.js
+index 1477333..d70af36 100644
+--- a/contract/marketplace.js
++++ b/contract/marketplace.js
+@@ -162,3 +162,45 @@ export async function recordSale(c) {
+   await c.put('sales_list', updSales);
+   await c.put('listings/' + id, updListing);
+ }
++
++// ── Feature-write path (NO MSB / NO TNK) ─────────────────────────────────────
++// Applied by the contract's `listing_feature` handler when the Council/admin node
++// appends a 'listing:create' / 'listing:cancel' op. Only the sole writer can
++// append features, so this is inherently Council-gated (no per-caller check).
++// Deterministic: validation already happened off-subnet in the Listings feature.
++// Returns 'created' | 'cancelled' | undefined (no-op).
++export async function applyListingFeature(c, op) {
++  const key = op?.key;
++  const v   = op?.value;
++  if (key !== 'listing:create' && key !== 'listing:cancel') return;
++  if (!v || typeof v !== 'object') return;
++  const id = v.id;
++  if (typeof id !== 'string' || id.length < 8) return;
++  const now = await c.get('currentTime');
++
++  if (key === 'listing:create') {
++    const existing = await c.get('listings/' + id);
++    if (null !== existing) return; // idempotent
++    const listing = {
++      id, seller: v.seller, token_name: v.token_name, price: v.price,
++      currency: v.currency, status: 'active', created_at: now ?? null, updated_at: now ?? null,
++    };
++    const list = (await c.get('listings_list')) ?? [];
++    const upd  = c.protocol.safeClone(list);
++    c.assert(upd !== null);
++    upd.push(id);
++    await c.put('listings/' + id, listing);
++    await c.put('listings_list', upd);
++    return 'created';
++  }
++
++  // listing:cancel
++  const listing = await c.get('listings/' + id);
++  if (null === listing || listing.status !== 'active') return;
++  const updated = c.protocol.safeClone(listing);
++  c.assert(updated !== null);
++  updated.status     = 'cancelled';
++  updated.updated_at = now ?? null;
++  await c.put('listings/' + id, updated);
++  return 'cancelled';
++}
+diff --git a/contract/marketplace.test.js b/contract/marketplace.test.js
+index b886499..05a47eb 100644
+--- a/contract/marketplace.test.js
++++ b/contract/marketplace.test.js
+@@ -2,7 +2,7 @@
+ // (Map-backed state) so the deterministic rules are provable without Pear/MSB.
+ // Run: node contract/marketplace.test.js
+ 
+-import { createListing, cancelListing, recordSale } from './marketplace.js';
++import { createListing, cancelListing, recordSale, applyListingFeature } from './marketplace.js';
+ 
+ let passed = 0, failed = 0;
+ const ok  = (cond, msg) => { if (cond) { passed++; } else { failed++; console.error('  ✗ FAIL:', msg); } };
+@@ -103,6 +103,34 @@ const seedCertified = () => ({ 'cards/CASTLEPEPE': CERT.cards.CASTLEPEPE, curren
+     ok(await c.get('sales/' + 'ef'.repeat(32)) === null, 'cannot sell a cancelled listing');
+   }
+ 
++  // 7. FEATURE path (no-MSB write): applyListingFeature creates + is idempotent.
++  {
++    const c = makeCtx({ address: 'writer', seed: { currentTime: 2000 },
++      value: null });
++    const op = { key: 'listing:create', value: { id: 'lst_feat_001', seller: 'alice', token_name: 'CASTLEPEPE', price: '12', currency: 'XCP' } };
++    const r1 = await applyListingFeature(c, op);
++    ok(r1 === 'created', 'feature create returns created');
++    const l = await c.get('listings/lst_feat_001');
++    ok(l && l.status === 'active' && l.seller === 'alice' && l.created_at === 2000, 'feature listing persisted with oracle time');
++    ok(JSON.stringify(await c.get('listings_list')) === JSON.stringify(['lst_feat_001']), 'feature listings_list updated');
++    const r2 = await applyListingFeature(c, op);
++    ok(r2 === undefined && (await c.get('listings_list')).length === 1, 'feature create is idempotent');
++  }
++
++  // 8. FEATURE cancel: only an active listing cancels; unknown/ignored ops no-op.
++  {
++    const c = makeCtx({ address: 'writer', seed: { currentTime: 2000 }, value: null });
++    await applyListingFeature(c, { key: 'listing:create', value: { id: 'lst_feat_002', seller: 'alice', token_name: 'NEVERPEPE', price: '5', currency: 'CASH' } });
++    const rc = await applyListingFeature(c, { key: 'listing:cancel', value: { id: 'lst_feat_002' } });
++    ok(rc === 'cancelled' && (await c.get('listings/lst_feat_002')).status === 'cancelled', 'feature cancel works on active listing');
++    const rc2 = await applyListingFeature(c, { key: 'listing:cancel', value: { id: 'lst_feat_002' } });
++    ok(rc2 === undefined, 'feature cancel on already-cancelled is a no-op');
++    const ru = await applyListingFeature(c, { key: 'something:else', value: { id: 'lst_feat_002' } });
++    ok(ru === undefined, 'unknown feature op is ignored');
++    const rb = await applyListingFeature(c, { key: 'listing:create', value: { id: 'short' } });
++    ok(rb === undefined && (await c.get('listings/short')) === null, 'too-short id rejected');
++  }
++
+   console.log(`\n${failed === 0 ? '✅' : '❌'} marketplace contract: ${passed} passed, ${failed} failed`);
+   process.exit(failed === 0 ? 0 : 1);
+ })();
+diff --git a/contract/protocol.js b/contract/protocol.js
+index ee5319b..5a21aa0 100644
+--- a/contract/protocol.js
++++ b/contract/protocol.js
+@@ -176,37 +176,27 @@ class UnatrareProtocol extends Protocol {
+             obj.type = 'getNetworkSnapshot';
+             return obj;
+         }
++        // Marketplace no-payload reads MUST be matched here, BEFORE the JSON
++        // parser (safeJsonParse throws on non-JSON like 'get_all_listings').
++        if (command === 'get_all_listings') { obj.type = 'getAllListings'; return obj; }
++        if (command === 'get_all_sales')    { obj.type = 'getAllSales';    return obj; }
+ 
+         // ── JSON payload commands ─────────────────────────────────────────────
+-        const json = this.safeJsonParse(command);
+-        if (json.op === 'certify_card') {
+-            obj.type  = 'certifyCard';
+-            obj.value = json;
+-            return obj;
+-        }
+-        if (json.op === 'register_node') {
+-            obj.type  = 'registerNode';
+-            obj.value = json;
+-            return obj;
+-        }
+-        if (json.op === 'get_node_state') {
+-            obj.type  = 'getNodeState';
+-            obj.value = json;
+-            return obj;
+-        }
+-        if (json.op === 'get_card') {
+-            obj.type  = 'getCard';
+-            obj.value = json;
+-            return obj;
+-        }
++        // Only parse when it actually looks like JSON, and guard every access so
++        // an unknown/typo command returns null instead of crashing the terminal.
++        const json = (typeof command === 'string' && command.trim().startsWith('{'))
++            ? this.safeJsonParse(command)
++            : null;
++        if (json && json.op === 'certify_card') { obj.type = 'certifyCard'; obj.value = json; return obj; }
++        if (json && json.op === 'register_node') { obj.type = 'registerNode'; obj.value = json; return obj; }
++        if (json && json.op === 'get_node_state') { obj.type = 'getNodeState'; obj.value = json; return obj; }
++        if (json && json.op === 'get_card') { obj.type = 'getCard'; obj.value = json; return obj; }
+ 
+-        // ── Marketplace commands ──────────────────────────────────────────────
+-        if (command === 'get_all_listings') { obj.type = 'getAllListings'; return obj; }
+-        if (command === 'get_all_sales')    { obj.type = 'getAllSales';    return obj; }
+-        if (json.op === 'create_listing') { obj.type = 'createListing'; obj.value = json; return obj; }
+-        if (json.op === 'cancel_listing') { obj.type = 'cancelListing'; obj.value = json; return obj; }
+-        if (json.op === 'record_sale')    { obj.type = 'recordSale';    obj.value = json; return obj; }
+-        if (json.op === 'get_listing')    { obj.type = 'getListing';    obj.value = json; return obj; }
++        // ── Marketplace JSON commands ─────────────────────────────────────────
++        if (json && json.op === 'create_listing') { obj.type = 'createListing'; obj.value = json; return obj; }
++        if (json && json.op === 'cancel_listing') { obj.type = 'cancelListing'; obj.value = json; return obj; }
++        if (json && json.op === 'record_sale')    { obj.type = 'recordSale';    obj.value = json; return obj; }
++        if (json && json.op === 'get_listing')    { obj.type = 'getListing';    obj.value = json; return obj; }
+ 
+         return null;
+     }
+diff --git a/features/listings/index.js b/features/listings/index.js
+new file mode 100644
+index 0000000..31b06ea
+--- /dev/null
++++ b/features/listings/index.js
+@@ -0,0 +1,84 @@
++import { Feature } from 'trac-peer';
++import fetch from 'bare-fetch';
++
++/**
++ * Listings Feature — writes marketplace listings WITHOUT MSB/TNK.
++ *
++ * Regular /tx contract calls settle through the MainSettlementBus (needs TNK on
++ * mainnet → "Dropping TX" when unfunded). Features append straight to the base
++ * for the sole writer (the Council/admin node), exactly like AdminBootstrap and
++ * the Timer. That is our no-cost write path: the Council node validates a listing
++ * (certification checked off-subnet over HTTP — allowed here in NODE context, not
++ * contract context) and appends it; every peer then replicates it P2P for reading.
++ * Value still settles on Bitcoin/Counterparty.
++ *
++ * The contract's `listing_feature` handler (contract.js) turns each append into
++ * deterministic state under listings/{id} + listings_list.
++ */
++class Listings extends Feature {
++  constructor(peer, options = {}) {
++    super(peer, options);
++    this.seed = options.seed || null;          // optional {listing_id,token_name,price,currency}
++    this.skipCert = options.skipCert === true;  // proof/testing bypass
++  }
++
++  async start(options = {}) {
++    // Seed path (proof / migration): append one listing on boot, then read it
++    // back and log — proves the write→replicate→read loop with no stdin needed.
++    if (this.seed) {
++      await this.createListing(this.seed);
++      await this.sleep(3000);
++      const list = await this.peer.protocol.instance.getSigned('listings_list');
++      const one  = this.seed.listing_id
++        ? await this.peer.protocol.instance.getSigned('listings/' + this.seed.listing_id)
++        : null;
++      console.log('[listings] readback listings_list:', JSON.stringify(list));
++      console.log('[listings] readback listing:', JSON.stringify(one));
++    }
++  }
++
++  // Council-node entry point. Validates, then appends (no MSB). Also callable
++  // later from the SC-Bridge so the website can post listings to the subnet.
++  async createListing(input = {}) {
++    const listing_id = String(input.listing_id || '').trim();
++    const token_name = String(input.token_name || '').trim().toUpperCase();
++    const price      = String(input.price || '').trim();
++    const currency   = String(input.currency || '').trim().toUpperCase();
++    if (!listing_id || !token_name || !price || !currency) {
++      console.log('[listings] rejected: missing fields'); return false;
++    }
++
++    // Certification gate — checked over HTTP (node context), not on-subnet.
++    if (!this.skipCert) {
++      let certified = false;
++      try {
++        const r = await fetch(`https://unatrare.wtf/c/${token_name}.json`);
++        certified = !!(r && r.ok);
++      } catch (_e) { certified = false; }
++      if (!certified) { console.log('[listings] rejected: token not certified:', token_name); return false; }
++    }
++
++    const existing = await this.peer.protocol.instance.getSigned('listings/' + listing_id);
++    if (existing !== null) { console.log('[listings] already exists, skip:', listing_id); return false; }
++
++    const seller = input.seller || (typeof this.peer.wallet.publicKey === 'string'
++      ? this.peer.wallet.publicKey
++      : Buffer.from(this.peer.wallet.publicKey).toString('hex'));
++
++    await this.append('listing:create', { id: listing_id, token_name, price, currency, seller });
++    console.log('[listings] appended listing:create', listing_id);
++    return true;
++  }
++
++  async cancelListing(listing_id) {
++    const id = String(listing_id || '').trim();
++    if (!id) return false;
++    await this.append('listing:cancel', { id });
++    console.log('[listings] appended listing:cancel', id);
++    return true;
++  }
++
++  async stop(options = {}) {}
++}
++
++export default Listings;
+diff --git a/index.js b/index.js
+index e8fa6d7..9215559 100644
+--- a/index.js
++++ b/index.js
+@@ -17,6 +17,7 @@ import AdminBootstrap from './features/admin-bootstrap/index.js';
+ import Sidechannel from './features/sidechannel/index.js';
+ import ScBridge from './features/sc-bridge/index.js';
+ import ArtDrive from './features/artdrive/index.js';
++import Listings from './features/listings/index.js';
+ 
+ const { env, storeLabel, flags } = getPearRuntime();
+ 
+@@ -511,6 +512,21 @@ if (peer.base.writable) {
+   const adminBootstrap = new AdminBootstrap(peer);
+   await peer.protocol.instance.addFeature('admin_bootstrap', adminBootstrap);
+   adminBootstrap.start().catch((err) => console.warn('[unatrare] AdminBootstrap error:', err?.message ?? err));
++
++  // Step 4: Listings feature — no-MSB marketplace writes (Council/admin node).
++  // Optional SEED_LISTING (JSON) appends one listing on boot (proof / migration).
++  let seedListing = null;
++  const seedRaw = (flags['seed-listing'] && String(flags['seed-listing'])) || env.SEED_LISTING || '';
++  if (seedRaw) {
++    try { seedListing = JSON.parse(seedRaw); } catch (_e) { console.warn('[listings] SEED_LISTING is not valid JSON — ignoring'); }
++  }
++  const skipCert = ['1', 'true', 'yes', 'on'].includes(
++    String((flags['seed-skip-cert'] && String(flags['seed-skip-cert'])) || env.SEED_SKIP_CERT || '').toLowerCase()
++  );
++  const listings = new Listings(peer, { seed: seedListing, skipCert });
++  await peer.protocol.instance.addFeature('listings', listings);
++  listings.start().catch((err) => console.warn('[listings] error:', err?.message ?? err));
++  console.log('[unatrare] Listings feature started (admin node)' + (seedListing ? ` [seeding ${seedListing.listing_id}]` : ''));
+ }
+ 
+ let scBridge = null;

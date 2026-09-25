@@ -2,7 +2,7 @@
 // (Map-backed state) so the deterministic rules are provable without Pear/MSB.
 // Run: node contract/marketplace.test.js
 
-import { createListing, cancelListing, recordSale } from './marketplace.js';
+import { createListing, cancelListing, recordSale, applyListingFeature } from './marketplace.js';
 
 let passed = 0, failed = 0;
 const ok  = (cond, msg) => { if (cond) { passed++; } else { failed++; console.error('  ✗ FAIL:', msg); } };
@@ -101,6 +101,34 @@ const seedCertified = () => ({ 'cards/CASTLEPEPE': CERT.cards.CASTLEPEPE, curren
     c.value = { op: 'recordSale', listing_id: 'lst_castle_004', buyer_address: 'bob', txid: 'ef'.repeat(32) };
     await recordSale(c);
     ok(await c.get('sales/' + 'ef'.repeat(32)) === null, 'cannot sell a cancelled listing');
+  }
+
+  // 7. FEATURE path (no-MSB write): applyListingFeature creates + is idempotent.
+  {
+    const c = makeCtx({ address: 'writer', seed: { currentTime: 2000 },
+      value: null });
+    const op = { key: 'listing:create', value: { id: 'lst_feat_001', seller: 'alice', token_name: 'CASTLEPEPE', price: '12', currency: 'XCP' } };
+    const r1 = await applyListingFeature(c, op);
+    ok(r1 === 'created', 'feature create returns created');
+    const l = await c.get('listings/lst_feat_001');
+    ok(l && l.status === 'active' && l.seller === 'alice' && l.created_at === 2000, 'feature listing persisted with oracle time');
+    ok(JSON.stringify(await c.get('listings_list')) === JSON.stringify(['lst_feat_001']), 'feature listings_list updated');
+    const r2 = await applyListingFeature(c, op);
+    ok(r2 === undefined && (await c.get('listings_list')).length === 1, 'feature create is idempotent');
+  }
+
+  // 8. FEATURE cancel: only an active listing cancels; unknown/ignored ops no-op.
+  {
+    const c = makeCtx({ address: 'writer', seed: { currentTime: 2000 }, value: null });
+    await applyListingFeature(c, { key: 'listing:create', value: { id: 'lst_feat_002', seller: 'alice', token_name: 'NEVERPEPE', price: '5', currency: 'CASH' } });
+    const rc = await applyListingFeature(c, { key: 'listing:cancel', value: { id: 'lst_feat_002' } });
+    ok(rc === 'cancelled' && (await c.get('listings/lst_feat_002')).status === 'cancelled', 'feature cancel works on active listing');
+    const rc2 = await applyListingFeature(c, { key: 'listing:cancel', value: { id: 'lst_feat_002' } });
+    ok(rc2 === undefined, 'feature cancel on already-cancelled is a no-op');
+    const ru = await applyListingFeature(c, { key: 'something:else', value: { id: 'lst_feat_002' } });
+    ok(ru === undefined, 'unknown feature op is ignored');
+    const rb = await applyListingFeature(c, { key: 'listing:create', value: { id: 'short' } });
+    ok(rb === undefined && (await c.get('listings/short')) === null, 'too-short id rejected');
   }
 
   console.log(`\n${failed === 0 ? '✅' : '❌'} marketplace contract: ${passed} passed, ${failed} failed`);

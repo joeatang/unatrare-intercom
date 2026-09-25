@@ -162,3 +162,45 @@ export async function recordSale(c) {
   await c.put('sales_list', updSales);
   await c.put('listings/' + id, updListing);
 }
+
+// ── Feature-write path (NO MSB / NO TNK) ─────────────────────────────────────
+// Applied by the contract's `listing_feature` handler when the Council/admin node
+// appends a 'listing:create' / 'listing:cancel' op. Only the sole writer can
+// append features, so this is inherently Council-gated (no per-caller check).
+// Deterministic: validation already happened off-subnet in the Listings feature.
+// Returns 'created' | 'cancelled' | undefined (no-op).
+export async function applyListingFeature(c, op) {
+  const key = op?.key;
+  const v   = op?.value;
+  if (key !== 'listing:create' && key !== 'listing:cancel') return;
+  if (!v || typeof v !== 'object') return;
+  const id = v.id;
+  if (typeof id !== 'string' || id.length < 8) return;
+  const now = await c.get('currentTime');
+
+  if (key === 'listing:create') {
+    const existing = await c.get('listings/' + id);
+    if (null !== existing) return; // idempotent
+    const listing = {
+      id, seller: v.seller, token_name: v.token_name, price: v.price,
+      currency: v.currency, status: 'active', created_at: now ?? null, updated_at: now ?? null,
+    };
+    const list = (await c.get('listings_list')) ?? [];
+    const upd  = c.protocol.safeClone(list);
+    c.assert(upd !== null);
+    upd.push(id);
+    await c.put('listings/' + id, listing);
+    await c.put('listings_list', upd);
+    return 'created';
+  }
+
+  // listing:cancel
+  const listing = await c.get('listings/' + id);
+  if (null === listing || listing.status !== 'active') return;
+  const updated = c.protocol.safeClone(listing);
+  c.assert(updated !== null);
+  updated.status     = 'cancelled';
+  updated.updated_at = now ?? null;
+  await c.put('listings/' + id, updated);
+  return 'cancelled';
+}

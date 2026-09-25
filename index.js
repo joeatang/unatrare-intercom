@@ -17,6 +17,7 @@ import AdminBootstrap from './features/admin-bootstrap/index.js';
 import Sidechannel from './features/sidechannel/index.js';
 import ScBridge from './features/sc-bridge/index.js';
 import ArtDrive from './features/artdrive/index.js';
+import Listings from './features/listings/index.js';
 
 const { env, storeLabel, flags } = getPearRuntime();
 
@@ -511,6 +512,21 @@ if (peer.base.writable) {
   const adminBootstrap = new AdminBootstrap(peer);
   await peer.protocol.instance.addFeature('admin_bootstrap', adminBootstrap);
   adminBootstrap.start().catch((err) => console.warn('[unatrare] AdminBootstrap error:', err?.message ?? err));
+
+  // Step 4: Listings feature — no-MSB marketplace writes (Council/admin node).
+  // Optional SEED_LISTING (JSON) appends one listing on boot (proof / migration).
+  let seedListing = null;
+  const seedRaw = (flags['seed-listing'] && String(flags['seed-listing'])) || env.SEED_LISTING || '';
+  if (seedRaw) {
+    try { seedListing = JSON.parse(seedRaw); } catch (_e) { console.warn('[listings] SEED_LISTING is not valid JSON — ignoring'); }
+  }
+  const skipCert = ['1', 'true', 'yes', 'on'].includes(
+    String((flags['seed-skip-cert'] && String(flags['seed-skip-cert'])) || env.SEED_SKIP_CERT || '').toLowerCase()
+  );
+  const listings = new Listings(peer, { seed: seedListing, skipCert });
+  await peer.protocol.instance.addFeature('listings', listings);
+  listings.start().catch((err) => console.warn('[listings] error:', err?.message ?? err));
+  console.log('[unatrare] Listings feature started (admin node)' + (seedListing ? ` [seeding ${seedListing.listing_id}]` : ''));
 }
 
 let scBridge = null;
