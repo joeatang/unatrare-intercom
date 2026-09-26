@@ -40,6 +40,9 @@ class Listings extends Feature {
       console.log('[listings] readback listings_list:', JSON.stringify(list));
       console.log('[listings] readback listing:', JSON.stringify(one));
     }
+    // Always log what's currently on the subnet at boot (persistent-node visibility).
+    const currentList = await this.peer.protocol.instance.getSigned('listings_list');
+    console.log('[listings] on subnet at boot:', JSON.stringify(currentList));
   }
 
   // Council-node entry point. Validates, then appends (no MSB). Also callable

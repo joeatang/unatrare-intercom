@@ -485,6 +485,9 @@ if (scBridgeEnabled) {
 console.log('================================================================');
 console.log('');
 
+// Hoisted so the SC-Bridge (defined later) can invoke listing writes on the admin node.
+let listingsFeature = null;
+
 // Auto-init timer + admin bootstrap if this peer is the subnet writer (bootstrap / admin node).
 if (peer.base.writable) {
   // Step 1: Ensure the autobase admin is set (required for Feature ops to be verified).
@@ -523,9 +526,9 @@ if (peer.base.writable) {
   const skipCert = ['1', 'true', 'yes', 'on'].includes(
     String((flags['seed-skip-cert'] && String(flags['seed-skip-cert'])) || env.SEED_SKIP_CERT || '').toLowerCase()
   );
-  const listings = new Listings(peer, { seed: seedListing, skipCert });
-  await peer.protocol.instance.addFeature('listings', listings);
-  listings.start().catch((err) => console.warn('[listings] error:', err?.message ?? err));
+  listingsFeature = new Listings(peer, { seed: seedListing, skipCert });
+  await peer.protocol.instance.addFeature('listings', listingsFeature);
+  listingsFeature.start().catch((err) => console.warn('[listings] error:', err?.message ?? err));
   console.log('[unatrare] Listings feature started (admin node)' + (seedListing ? ` [seeding ${seedListing.listing_id}]` : ''));
 }
 
@@ -597,6 +600,29 @@ if (scBridgeEnabled) {
             reply({ type: 'token_result', token: tokenName, certified: false, data: null });
           })
           .catch(err => sendError(err?.message ?? 'query_token failed'));
+        return;
+      }
+      // ── Marketplace: read all active listings from subnet state ──────────
+      if (message.type === 'get_listings') {
+        Promise.resolve(peer.protocol.instance.api.getActiveListings())
+          .then((listings) => reply({ type: 'listings', listings: Array.isArray(listings) ? listings : [] }))
+          .catch((err) => sendError(err?.message ?? 'get_listings failed'));
+        return;
+      }
+      // ── Marketplace: create a listing (admin/Council node only) ──────────
+      if (message.type === 'create_listing') {
+        if (!listingsFeature) { sendError('this node is not a subnet writer'); return; }
+        listingsFeature.createListing({
+          listing_id: message.listing_id,
+          token_name: message.token_name,
+          price: message.price,
+          currency: message.currency,
+          seller: message.seller,
+        })
+          .then((okz) => okz
+            ? reply({ type: 'listing_created', listing_id: message.listing_id })
+            : sendError('create_listing rejected (uncertified token, missing fields, or already exists)'))
+          .catch((err) => sendError(err?.message ?? 'create_listing failed'));
         return;
       }
       sendError(`Unknown type: ${message.type}`);
